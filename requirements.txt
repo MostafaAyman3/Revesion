@@ -1,0 +1,20 @@
+# Backend Dependencies
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Medical Imaging
+nibabel>=5.0.0
+numpy>=1.24.0
+opencv-python>=4.8.0
+scikit-image>=0.21.0
+
+# Utilities
+pydantic>=2.0.0
+
+# Optional: GPU support (uncomment for CUDA)
+# torch>=2.0.0+cu118
