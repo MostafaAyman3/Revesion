@@ -38,10 +38,10 @@ def find_model_path():
     """Find model file in possible locations."""
     possible_paths = [
         Path(MODEL_PATH) if MODEL_PATH else None,
-        Path(__file__).parent.parent / "model_epoch_18.pth",
-        Path(__file__).parent.parent.parent / "model_epoch_18.pth",
-        Path("D:/Data_Projects/model_epoch_18.pth"),
-        Path("model_epoch_18.pth"),
+        Path(__file__).parent.parent / "brats_unet2d_final (15).pth",
+        Path(__file__).parent.parent.parent / "brats_unet2d_final (15).pth",
+        Path("D:/Data_Projects/brats_unet2d_final (15).pth"),
+        Path("brats_unet2d_final (15).pth"),
     ]
     
     for p in possible_paths:
