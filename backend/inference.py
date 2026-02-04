@@ -8,6 +8,7 @@ from typing import Tuple, Dict, Any
 import tempfile
 import os
 import cv2
+from scipy import ndimage
 
 from model import ResUNet2D, load_model
 from preprocessing import (
@@ -15,6 +16,41 @@ from preprocessing import (
     brats_normalize,
     IMG_SIZE
 )
+
+
+def post_process_clean(pred_3d: np.ndarray, min_size: int = 60) -> np.ndarray:
+    """
+    Remove small disconnected components from segmentation.
+    Keeps only connected components larger than min_size voxels.
+    
+    Args:
+        pred_3d: 3D prediction volume with class labels
+        min_size: Minimum component size to keep (in voxels)
+        
+    Returns:
+        Cleaned prediction volume
+    """
+    cleaned = np.zeros_like(pred_3d)
+    
+    for class_id in [1, 2, 4]:
+        # Get binary mask for this class
+        mask = (pred_3d == class_id).astype(np.uint8)
+        
+        if mask.sum() == 0:
+            continue
+        
+        # Label connected components
+        labeled, num_features = ndimage.label(mask)
+        
+        # Get size of each component
+        component_sizes = ndimage.sum(mask, labeled, range(1, num_features + 1))
+        
+        # Keep only large enough components
+        for i, size in enumerate(component_sizes, 1):
+            if size >= min_size:
+                cleaned[labeled == i] = class_id
+    
+    return cleaned
 
 
 class BraTSInferencePipeline:
@@ -89,8 +125,17 @@ class BraTSInferencePipeline:
                 pred = cv2.resize(pred.astype(np.uint8), (W, H), interpolation=cv2.INTER_NEAREST)
                 pred_3d[:, :, z] = pred
         
+        # Create brain mask from T1 and FLAIR (non-zero regions)
+        brain_mask = (modalities['t1'] > 0) | (modalities['flair'] > 0)
+        
+        # Apply brain mask to remove predictions outside brain
+        pred_3d = pred_3d * brain_mask.astype(np.uint8)
+        
         # Map class 3 to label 4 (BraTS convention)
         pred_3d[pred_3d == 3] = 4
+        
+        # Post-process: remove small disconnected components
+        pred_3d = post_process_clean(pred_3d, min_size=60)
         
         result = {
             "prediction": pred_3d,
