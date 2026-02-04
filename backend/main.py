@@ -19,7 +19,12 @@ from pydantic import BaseModel
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent))
 
-from inference import BraTSInferencePipeline, generate_3d_visualization_data
+from inference import (
+    BraTSInferencePipeline, 
+    generate_3d_visualization_data,
+    generate_2d_visualization_data,
+    generate_3d_visualization_threejs
+)
 
 # Configuration - check multiple possible locations
 MODEL_PATH = os.environ.get("MODEL_PATH", None)
@@ -95,9 +100,14 @@ class HealthResponse(BaseModel):
 class PredictionResponse(BaseModel):
     success: bool
     message: str
+    patient_id: Optional[str] = None
     visualization_data: Optional[dict] = None
+    visualization_2d: Optional[dict] = None
+    visualization_3d: Optional[dict] = None
+    metrics: Optional[dict] = None
     rle: Optional[dict] = None
     volume_shape: Optional[list] = None
+    tumor_volumes: Optional[dict] = None
     tumor_volumes: Optional[dict] = None
 
 
@@ -133,15 +143,16 @@ async def predict(
     t1: UploadFile = File(..., description="T1 modality NIfTI file"),
     t1ce: UploadFile = File(..., description="T1ce modality NIfTI file"),
     t2: UploadFile = File(..., description="T2 modality NIfTI file"),
+    patient_id: str = Form(default="Patient", description="Patient identifier"),
     return_rle: bool = Form(default=True, description="Return RLE encodings")
 ):
     """
     Run brain tumor segmentation inference.
     
     Accepts 4 NIfTI files (FLAIR, T1, T1ce, T2) and returns:
-    - 3D visualization data for Plotly
-    - Optional RLE encodings per class
-    - Tumor volume statistics
+    - 2D slice visualization data (base64 images)
+    - 3D mesh visualization data for Three.js
+    - Tumor volume statistics and metrics
     """
     global pipeline
     
@@ -156,6 +167,9 @@ async def predict(
         validate_nifti_file(file)
     
     try:
+        import time
+        start_time = time.time()
+        
         # Read file contents
         flair_bytes = await flair.read()
         t1_bytes = await t1.read()
@@ -169,15 +183,32 @@ async def predict(
             return_t1ce=True
         )
         
-        # Generate visualization data with brain mesh from T1ce
+        inference_time = time.time() - start_time
+        
+        prediction = result["prediction"]
+        modalities = result.get("modalities", {})
         t1ce_volume = result.get("t1ce_volume", None)
+        
+        # Generate visualization data (old format for backward compatibility)
         visualization_data = generate_3d_visualization_data(
-            result["prediction"], 
+            prediction, 
+            t1ce_volume=t1ce_volume
+        )
+        
+        # Generate 2D slice visualization (new frontend)
+        visualization_2d = generate_2d_visualization_data(
+            modalities,
+            prediction,
+            step=1  # Include all slices
+        )
+        
+        # Generate 3D mesh data for Three.js (new frontend)
+        visualization_3d = generate_3d_visualization_threejs(
+            prediction,
             t1ce_volume=t1ce_volume
         )
         
         # Calculate tumor volumes (in voxels)
-        prediction = result["prediction"]
         tumor_volumes = {
             "necrotic_core": int(np.sum(prediction == 1)),
             "edema": int(np.sum(prediction == 2)),
@@ -185,10 +216,24 @@ async def predict(
             "total_tumor": int(np.sum(prediction > 0))
         }
         
+        # Calculate metrics for new frontend
+        total = tumor_volumes["total_tumor"]
+        enhancing_pct = (tumor_volumes["enhancing_tumor"] / total * 100) if total > 0 else 0
+        
+        metrics = {
+            "volume": total,
+            "enhancing_percentage": round(enhancing_pct, 1),
+            "inference_time": f"{inference_time:.2f}s"
+        }
+        
         return PredictionResponse(
             success=True,
             message="Segmentation completed successfully",
+            patient_id=patient_id,
             visualization_data=visualization_data,
+            visualization_2d=visualization_2d,
+            visualization_3d=visualization_3d,
+            metrics=metrics,
             rle=result.get("rle"),
             volume_shape=list(result["original_shape"]),
             tumor_volumes=tumor_volumes

@@ -139,7 +139,8 @@ class BraTSInferencePipeline:
         
         result = {
             "prediction": pred_3d,
-            "original_shape": original_shape
+            "original_shape": original_shape,
+            "modalities": modalities  # Return all modalities for 2D visualization
         }
         
         # Store T1ce volume for brain shell visualization
@@ -335,3 +336,149 @@ def generate_3d_visualization_data(
                 })
     
     return visualization_data
+
+
+def generate_2d_visualization_data(
+    modalities: Dict[str, np.ndarray],
+    prediction: np.ndarray,
+    step: int = 1
+) -> Dict[str, Any]:
+    """
+    Generate 2D slice images as base64 for the new frontend.
+    
+    Args:
+        modalities: Dictionary with flair, t1, t1ce, t2 volumes
+        prediction: 3D segmentation prediction
+        step: Step size for slice sampling (1 = all slices)
+        
+    Returns:
+        Dictionary with base64 encoded slices for each modality and segmentation
+    """
+    import base64
+    from io import BytesIO
+    from PIL import Image
+    
+    H, W, D = prediction.shape
+    
+    # Color map for segmentation classes
+    seg_colors = {
+        1: (255, 0, 0),      # Necrotic - Red
+        2: (0, 255, 0),      # Edema - Green
+        4: (255, 215, 0)     # Enhancing - Gold
+    }
+    
+    slices = {
+        "flair": [],
+        "t1": [],
+        "t1ce": [],
+        "t2": [],
+        "segmentation": []
+    }
+    
+    for z in range(0, D, step):
+        # Process each modality
+        for mod_name in ["flair", "t1", "t1ce", "t2"]:
+            if mod_name in modalities:
+                slice_data = modalities[mod_name][:, :, z]
+                # Normalize to 0-255
+                slice_norm = ((slice_data - slice_data.min()) / (slice_data.max() - slice_data.min() + 1e-8) * 255).astype(np.uint8)
+                
+                # Convert to PIL and base64
+                img = Image.fromarray(slice_norm, mode='L')
+                buffer = BytesIO()
+                img.save(buffer, format='PNG')
+                slices[mod_name].append(base64.b64encode(buffer.getvalue()).decode())
+        
+        # Generate colored segmentation mask
+        seg_slice = prediction[:, :, z]
+        seg_rgb = np.zeros((H, W, 4), dtype=np.uint8)  # RGBA
+        
+        for class_id, color in seg_colors.items():
+            mask = seg_slice == class_id
+            seg_rgb[mask, 0] = color[0]  # R
+            seg_rgb[mask, 1] = color[1]  # G
+            seg_rgb[mask, 2] = color[2]  # B
+            seg_rgb[mask, 3] = 255       # A (fully opaque where tumor exists)
+        
+        img = Image.fromarray(seg_rgb, mode='RGBA')
+        buffer = BytesIO()
+        img.save(buffer, format='PNG')
+        slices["segmentation"].append(base64.b64encode(buffer.getvalue()).decode())
+    
+    return {
+        "slices": slices,
+        "slice_count": len(slices["flair"])
+    }
+
+
+def generate_3d_visualization_threejs(
+    prediction: np.ndarray,
+    t1ce_volume: np.ndarray = None
+) -> Dict[str, Any]:
+    """
+    Generate 3D mesh data for Three.js visualization (new frontend format).
+    
+    Args:
+        prediction: 3D prediction volume
+        t1ce_volume: T1ce volume for brain structure
+        
+    Returns:
+        Dictionary with brain_structure and tumor_regions meshes
+    """
+    from skimage import measure
+    
+    colors = {
+        1: "#ff0000",    # Necrotic - Red
+        2: "#00ff00",    # Edema - Green
+        4: "#ffd700"     # Enhancing - Gold
+    }
+    
+    names = {
+        1: "Necrotic Core",
+        2: "Edema", 
+        4: "Enhancing Tumor"
+    }
+    
+    result = {
+        "brain_structure": None,
+        "tumor_regions": {}
+    }
+    
+    # Generate brain mesh from T1ce
+    if t1ce_volume is not None:
+        try:
+            brain_threshold = np.percentile(t1ce_volume[t1ce_volume > 0], 10) if np.sum(t1ce_volume > 0) > 0 else 10
+            verts, faces, _, _ = measure.marching_cubes(
+                t1ce_volume > brain_threshold,
+                step_size=3
+            )
+            result["brain_structure"] = {
+                "vertices": verts.tolist(),
+                "faces": faces.tolist(),
+                "color": "gray",
+                "opacity": 0.15,
+                "name": "Brain"
+            }
+        except Exception as e:
+            print(f"Warning: Brain mesh generation failed: {e}")
+    
+    # Generate tumor meshes
+    for class_id in [1, 2, 4]:
+        mask = (prediction == class_id)
+        if np.sum(mask) > 0:
+            try:
+                verts, faces, _, _ = measure.marching_cubes(
+                    mask.astype(float),
+                    step_size=2
+                )
+                result["tumor_regions"][str(class_id)] = {
+                    "vertices": verts.tolist(),
+                    "faces": faces.tolist(),
+                    "color": colors[class_id],
+                    "opacity": 0.7,
+                    "name": names[class_id]
+                }
+            except Exception as e:
+                print(f"Warning: Tumor mesh for class {class_id} failed: {e}")
+    
+    return result
