@@ -1,0 +1,9 @@
+1. User selects 4 files
+2. Click "Analyze"
+3. → POST /upload/start (get session_id)
+4. → POST /upload/file (flair) with progress
+5. → POST /upload/file (t1) with progress  
+6. → POST /upload/file (t1ce) with progress
+7. → POST /upload/file (t2) with progress
+8. → POST /upload/process/{session_id}
+9. → Navigate to Dashboard with results
